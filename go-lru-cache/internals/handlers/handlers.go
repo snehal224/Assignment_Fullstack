@@ -12,7 +12,7 @@ var lruCache = cache.NewLRUCache(100)
 type SetRequest struct {
     Key        string `json:"key"`
     Value      string `json:"value"`
-    Expiration int    `json:"expiration"` // expiration in seconds
+    Expiration int    `json:"expiration"` 
 }
 
 func SetHandler(w http.ResponseWriter, r *http.Request) {

@@ -1,9 +1,9 @@
 package cache
 
 import (
-    "container/list"
     "sync"
     "time"
+    "go-lru-cache/internals/list"
 )
 
 type CacheItem struct {
@@ -18,16 +18,16 @@ func (item *CacheItem) isExpired() bool {
 
 type LRUCache struct {
     capacity int
-    items    map[string]*list.Element
-    order    *list.List
+    items    map[string]*list.Node
+    order    *list.DoublyLinkedList
     lock     sync.RWMutex
 }
 
 func NewLRUCache(capacity int) *LRUCache {
     return &LRUCache{
         capacity: capacity,
-        items:    make(map[string]*list.Element),
-        order:    list.New(),
+        items:    make(map[string]*list.Node),
+        order:    list.NewDoublyLinkedList(),
     }
 }
 
@@ -35,12 +35,12 @@ func (c *LRUCache) Get(key string) (interface{}, bool) {
     c.lock.RLock()
     defer c.lock.RUnlock()
 
-    if element, found := c.items[key]; found {
-        item := element.Value.(*CacheItem)
+    if node, found := c.items[key]; found {
+        item := node.Value.(*CacheItem)
         if item.isExpired() {
             return nil, false
         }
-        c.order.MoveToFront(element)
+        c.order.MoveToFront(node)
         return item.value, true
     }
     return nil, false
@@ -50,14 +50,14 @@ func (c *LRUCache) Set(key string, value interface{}, duration time.Duration) {
     c.lock.Lock()
     defer c.lock.Unlock()
 
-    if element, found := c.items[key]; found {
-        c.order.MoveToFront(element)
-        element.Value.(*CacheItem).value = value
-        element.Value.(*CacheItem).expiration = time.Now().Add(duration).UnixNano()
+    if node, found := c.items[key]; found {
+        c.order.MoveToFront(node)
+        node.Value.(*CacheItem).value = value
+        node.Value.(*CacheItem).expiration = time.Now().Add(duration).UnixNano()
         return
     }
 
-    if c.order.Len() >= c.capacity {
+    if len(c.items) >= c.capacity {
         c.evict()
     }
 
@@ -67,25 +67,45 @@ func (c *LRUCache) Set(key string, value interface{}, duration time.Duration) {
         expiration: time.Now().Add(duration).UnixNano(),
     }
 
-    element := c.order.PushFront(item)
-    c.items[key] = element
+    node := &list.Node{
+        Key:   key,
+        Value: item,
+    }
+
+    c.order.PushFront(node)
+    c.items[key] = node
 }
 
 func (c *LRUCache) Delete(key string) {
     c.lock.Lock()
     defer c.lock.Unlock()
 
-    if element, found := c.items[key]; found {
-        c.order.Remove(element)
+    if node, found := c.items[key]; found {
+        c.order.remove(node)
         delete(c.items, key)
     }
 }
 
 func (c *LRUCache) evict() {
-    element := c.order.Back()
-    if element != nil {
-        item := element.Value.(*CacheItem)
-        delete(c.items, item.key)
-        c.order.Remove(element)
+    node := c.order.RemoveTail()
+    if node != nil {
+        delete(c.items, node.Key)
     }
 }
+
+func (c *LRUCache) GetAllItems() map[string]interface{} {
+    c.lock.RLock()
+    defer c.lock.RUnlock()
+
+    items := make(map[string]interface{})
+    current := c.order.head
+    for current != nil {
+        item := current.Value.(*CacheItem)
+        if !item.isExpired() {
+            items[current.Key] = item.value
+        }
+        current = current.Next
+    }
+    return items
+}
+
